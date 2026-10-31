@@ -30,7 +30,7 @@ Le plus simple : colle le lien de ce dépôt dans Claude Code et demande-lui d'i
 Ou à la main, pour tous tes projets :
 
 ```bash
-git clone https://github.com/<ton-compte>/skills-montage-claude.git
+git clone https://github.com/Sosavskaii/skills-montage-claude.git
 ```
 
 puis copie les 3 dossiers de `skills/` dans `~/.claude/skills/` (sur Windows : `C:\Users\<toi>\.claude\skills\`).
