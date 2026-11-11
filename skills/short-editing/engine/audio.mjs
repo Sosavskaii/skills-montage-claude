@@ -102,7 +102,10 @@ export async function buildAudio(proj, raw) {
   // ---- ducking envelope: fast attack, slow release, so the bed breathes back in between sentences
   const DK = new Float32Array(N), aA = Math.exp(-1 / (.012 * SR)), aR = Math.exp(-1 / (.35 * SR)), thr = db(-30);
   let env = 0, sm = 0; const aS = Math.exp(-1 / (.06 * SR));
-  for (let i = 0; i < N; i++) { const x = Math.abs(V[i]); env = x > env ? x + (env - x) * aA : x + (env - x) * aR; const d = clamp(env / thr); sm = d + (sm - d) * aS; DK[i] = 1 - mixCfg.duck * sm; }
+  // spec.mix.sfxDuck (0..1, default 0): the SFX (bus + files) also dip under the voice, like the bed, so they stay heard in the
+  // breaths without covering a word (sosav, 2026-11-11, after "bruitages trop forts"; mixing advice of Secrets de Monteur Pro)
+  const DS = new Float32Array(N), sd = clamp(mixCfg.sfxDuck ?? 0);
+  for (let i = 0; i < N; i++) { const x = Math.abs(V[i]); env = x > env ? x + (env - x) * aA : x + (env - x) * aR; const d = clamp(env / thr); sm = d + (sm - d) * aS; DK[i] = 1 - mixCfg.duck * sm; DS[i] = 1 - sd * sm; }
 
   // ---- score + sfx
   const lib = path.join(path.dirname(fileURLToPath(import.meta.url)), '../assets/music'), bed = raw.music?.bed && path.join(lib, `${raw.music.bed}.mp3`);
@@ -157,11 +160,21 @@ export async function buildAudio(proj, raw) {
   for (const a of drops) { const i0 = Math.round(a * SR), i1 = i0 + Math.round(dl * SR);
     for (let i = Math.max(0, i0 - ed); i < Math.min(N, i1 + ed); i++) DR[i] = Math.min(DR[i], dd + (1 - dd) * (1 - clamp(Math.min((i - i0 + ed) / ed, (i1 + ed - i) / ed)))); }
 
+  // spec.mix.sfxVoiceCut (dB, e.g. -4; default 0 = off): a wide peaking dip around 2.5 kHz on the SFX (bus + files), where the
+  // voice's intelligibility lives, so a sound effect can stay audible without masking a word
+  const vc = mixCfg.sfxVoiceCut ?? 0;
+  if (vc) {
+    const A = Math.pow(10, vc / 40), w0 = 2 * Math.PI * 2500 / SR, al = Math.sin(w0) / (2 * .8), cw = Math.cos(w0), a0 = 1 + al / A;
+    const b = [(1 + al * A) / a0, -2 * cw / a0, (1 - al * A) / a0], a = [-2 * cw / a0, (1 - al / A) / a0];
+    for (const bus of [SF, FX]) for (let c = 0; c < 2; c++) { const s = bus[c]; let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+      for (let i = 0; i < N; i++) { const x = s[i], y = b[0] * x + b[1] * x1 + b[2] * x2 - a[0] * y1 - a[1] * y2; x2 = x1; x1 = x; y2 = y1; y1 = y; s[i] = y; } }
+  }
+
   // ---- sum + master
   const fadeIn = Math.round(.02 * SR), fadeOut = Math.round(.35 * SR), Mx = [new Float32Array(N), new Float32Array(N)];
   for (let c = 0; c < 2; c++) for (let i = 0; i < N; i++) {
     const f = Math.min(1, i / fadeIn, (N - i) / fadeOut);
-    Mx[c][i] = (V[i] + BED[c][i] * gb * DK[i] * DR[i] + FX[c][i] * gf + SF[c][i]) * f;
+    Mx[c][i] = (V[i] + BED[c][i] * gb * DK[i] * DR[i] + (FX[c][i] * gf + SF[c][i]) * DS[i]) * f;
   }
   // sample-peak ceiling; AAC can add ~1.5 dB of overs on sharp transients, so lower it (spec.mix.ceil, dBFS) if QC fails
   let gain = 1, Y, I; const ceil = db(spec.mix?.ceil ?? -1.5);
